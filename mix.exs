@@ -44,7 +44,7 @@ defmodule Jido.MixProject do
   # Run "mix help compile.app" to learn about applications.
   def application do
     [
-      extra_applications: [:crypto, :logger],
+      extra_applications: [:crypto, :logger, :inets, :ssl],
       mod: {Jido.Application, []}
     ]
   end
@@ -64,6 +64,17 @@ defmodule Jido.MixProject do
   end
 
   # Specifies which paths to compile per environment.
+  # glider_ex is a Rustler NIF that lives outside Hex for now. `GLIDER_EX_PATH`
+  # lets a checkout whose parent directory differs from the usual layout point
+  # at the real source tree.
+  defp glider_ex_opts do
+    [
+      path: System.get_env("GLIDER_EX_PATH", "../glider_ex"),
+      only: [:dev, :test],
+      optional: true
+    ]
+  end
+
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
 
@@ -98,6 +109,7 @@ defmodule Jido.MixProject do
           "guides/await.md",
           "guides/orchestration.md",
           "guides/pods.md",
+          "guides/context-graph.md",
           "guides/multi-tenancy.md"
         ],
         Operations: [
@@ -157,6 +169,7 @@ defmodule Jido.MixProject do
         {"guides/await.md", title: "Await & Coordination"},
         {"guides/orchestration.md", title: "Multi-Agent Orchestration"},
         {"guides/pods.md", title: "Pods"},
+        {"guides/context-graph.md", title: "Context & Knowledge Graphs"},
         {"guides/multi-tenancy.md", title: "Multi-Tenancy"},
 
         # Operations
@@ -206,6 +219,34 @@ defmodule Jido.MixProject do
           Jido.Pod.Topology,
           Jido.Pod.Topology.Link,
           Jido.Pod.Topology.Node
+        ],
+        "Context & Knowledge": [
+          Jido.Context,
+          Jido.Context.Graph,
+          Jido.Context.Mesh,
+          Jido.Context.Delta,
+          Jido.Context.Plugin,
+          Jido.Context.Cypher,
+          Jido.Context.Engine,
+          Jido.Context.Engine.Glider,
+          Jido.Context.Mesh.Transport,
+          Jido.Context.Mesh.PG,
+          Jido.Context.Mesh.Log,
+          Jido.Context.Mesh.Router,
+          Jido.Context.Store,
+          Jido.Context.Store.Memory,
+          Jido.Context.Store.Disk,
+          Jido.Context.Store.S3,
+          Jido.Context.S3,
+          Jido.Context.S3.SigV4,
+          Jido.Context.S3.HTTP,
+          Jido.Context.S3.HTTP.Httpc,
+          Jido.Context.Actions,
+          Jido.Context.Actions.Assert,
+          Jido.Context.Actions.Relate,
+          Jido.Context.Actions.Remember,
+          Jido.Context.Actions.Recall,
+          Jido.Context.Actions.Query
         ],
         Strategies: [
           Jido.Agent.Strategy,
@@ -411,7 +452,13 @@ defmodule Jido.MixProject do
       {:mix_test_watch, "~> 1.0", only: [:dev, :test], runtime: false},
 
       # Code generation
-      {:igniter, "~> 0.7", optional: true}
+      {:igniter, "~> 0.7", optional: true},
+
+      # Context & knowledge graph engine. Not a published package yet, so it is
+      # carried as a dev/test path dependency here and detected at runtime by
+      # `Jido.Context.Graph.Glider`. Applications that want `Jido.Context` add
+      # `{:glider_ex, ...}` to their own deps; Jido never requires it.
+      {:glider_ex, glider_ex_opts()}
     ]
   end
 

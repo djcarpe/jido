@@ -20,6 +20,7 @@ Build reliable agent systems by separating pure decision logic from runtime side
 - `Jido.Agent.Directive.*`: typed effect descriptors (`Emit`, `SpawnAgent`, `StopChild`, etc.)
 - `Jido.Agent.StateOp.*`: internal state transition operations applied by strategy layer
 - Plugins/sensors provide capability composition without coupling core agent logic
+- `Jido.Context`: per-agent property graph (Glider) with topic-routed replication; memory/disk/S3
 
 ## Standards
 - Keep `cmd/2` pure: same input => same `{agent, directives}` output

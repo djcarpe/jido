@@ -35,6 +35,23 @@ defmodule Jido.Storage.ETS.Owner do
     :exit, reason -> {:error, {:owner_unavailable, reason}}
   end
 
+  @doc """
+  Creates a named ETS table owned by this process, if it does not exist.
+
+  Tables are created *inside* the owner rather than handed over with
+  `:ets.give_away/3`, so no transfer message is involved and the table's
+  lifetime is the owner's from the start.
+  """
+  @spec create_table(atom(), [term()]) :: :ok | {:error, term()}
+  def create_table(name, opts) when is_atom(name) and is_list(opts) do
+    case GenServer.whereis(@name) do
+      nil -> {:error, :not_started}
+      pid -> GenServer.call(pid, {:create_table, name, opts}, @call_timeout)
+    end
+  catch
+    :exit, reason -> {:error, {:owner_unavailable, reason}}
+  end
+
   @impl true
   def init(_opts) do
     {:ok, %{}}
@@ -43,5 +60,19 @@ defmodule Jido.Storage.ETS.Owner do
   @impl true
   def handle_call({:ensure_tables, opts}, _from, state) do
     {:reply, Jido.Storage.ETS.create_tables(opts), state}
+  end
+
+  def handle_call({:create_table, name, opts}, _from, state) do
+    result =
+      case :ets.whereis(name) do
+        :undefined ->
+          :ets.new(name, opts)
+          :ok
+
+        _ref ->
+          :ok
+      end
+
+    {:reply, result, state}
   end
 end

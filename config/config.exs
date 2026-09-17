@@ -66,6 +66,12 @@ if config_env() == :dev do
     ]
 end
 
+# glider_ex ships a prebuilt NIF in `priv/native`. When no Rust toolchain is
+# present, tell Rustler to load that artifact instead of failing the build.
+if System.find_executable("cargo") == nil do
+  config :glider_ex, Glider.Native, skip_compilation?: true
+end
+
 # Import environment specific config (test.exs only)
 if config_env() == :test do
   import_config "test.exs"

@@ -120,6 +120,13 @@ Jido isn't "better GenServer" - it's a formalized agent pattern built *on* GenSe
 - Plan-based orchestration for complex workflows
 - Durable groups of agents with named topology, hierarchical runtime ownership, nested pod nodes, and partition-safe tenancy boundaries
 
+### Shared Context & Knowledge Graphs
+- An embedded property graph per agent, backed by [Glider](https://github.com/agentjido/glider) — reads are a function call, not a network hop
+- Topic-routed replication, so what one agent learns reaches the agents that asked for it
+- In memory, on disk, or snapshotted to S3 — and streamed across machines through an S3 topic log
+- Last-writer-wins convergence with tombstones; no leader, no shared database
+- See `mix jido.context.mesh` for three agents sharing one mesh
+
 ## Installation
 
 ### Using Igniter (Recommended)
@@ -324,6 +331,7 @@ its owning `AgentServer`.
 - [Choosing a Runtime Pattern](guides/runtime-patterns.md) - When to use `SpawnAgent`, `InstanceManager`, `Pod`, and `partition`
 - [Pods](guides/pods.md) - Durable groups of agents with named topology, lazy activation, nested pods, and live add/remove mutation
 - [Multi-Tenancy](guides/multi-tenancy.md) - Shared-instance tenancy with partitions and Pod-first durable workspaces
+- [Context & Knowledge Graphs](guides/context-graph.md) - A shared graph across agents, in memory, on disk, or streamed through S3
 - [Persistence & Storage](guides/storage.md) - Hibernate, thaw, and InstanceManager lifecycle
 - [Scheduling](guides/scheduling.md) - Declarative and dynamic cron scheduling
 - [Plugins](guides/plugins.md) - Composable capability bundles
