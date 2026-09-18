@@ -40,8 +40,16 @@ defmodule Jido.Context.Engine.Glider do
   Building it requires a Rust toolchain (https://rustup.rs).
   """
 
+  # Every call below goes through `apply/3` rather than naming `Glider`
+  # directly. Not cosmetic: a direct call makes the compiler resolve the module,
+  # so any build without the optional dependency emits "module Glider is not
+  # available" for each call site and a release compiled with
+  # --warnings-as-errors fails outright. Neither a module attribute nor a
+  # private function helps -- the compiler folds both back into a literal call.
+  @glider :"Elixir.Glider"
+
   @impl true
-  def available?, do: Code.ensure_loaded?(Glider)
+  def available?, do: Code.ensure_loaded?(@glider)
 
   @doc """
   The reason returned by every call when Glider is missing, with install
@@ -54,7 +62,7 @@ defmodule Jido.Context.Engine.Glider do
   def open(location) do
     guarded(fn ->
       case location do
-        :memory -> Glider.open()
+        :memory -> apply(@glider, :open, [])
         {:file, path, sync} -> open_file(path, sync)
       end
     end)
@@ -62,7 +70,7 @@ defmodule Jido.Context.Engine.Glider do
 
   defp open_file(path, sync) do
     with :ok <- ensure_parent_dir(path) do
-      Glider.open(path, sync)
+      apply(@glider, :open, [path, sync])
     end
   end
 
@@ -74,12 +82,12 @@ defmodule Jido.Context.Engine.Glider do
   end
 
   @impl true
-  def run(db, statement), do: guarded(fn -> Glider.run(db, statement) end)
+  def run(db, statement), do: guarded(fn -> apply(@glider, :run, [db, statement]) end)
 
   @impl true
   def query(db, statement) do
     guarded(fn ->
-      case Glider.query(db, statement) do
+      case apply(@glider, :query, [db, statement]) do
         {:ok, result} -> {:ok, %{columns: result.columns, rows: result.rows}}
         {:error, reason} -> {:error, reason}
       end
@@ -87,21 +95,21 @@ defmodule Jido.Context.Engine.Glider do
   end
 
   @impl true
-  def export(db), do: guarded(fn -> Glider.export_jsonl(db) end)
+  def export(db), do: guarded(fn -> apply(@glider, :export_jsonl, [db]) end)
 
   @impl true
-  def import(db, jsonl), do: guarded(fn -> Glider.import_jsonl(db, jsonl) end)
+  def import(db, jsonl), do: guarded(fn -> apply(@glider, :import_jsonl, [db, jsonl]) end)
 
   @impl true
-  def checkpoint(db), do: guarded(fn -> Glider.checkpoint(db) end)
+  def checkpoint(db), do: guarded(fn -> apply(@glider, :checkpoint, [db]) end)
 
   @impl true
-  def stats(db), do: guarded(fn -> Glider.stats(db) end)
+  def stats(db), do: guarded(fn -> apply(@glider, :stats, [db]) end)
 
   @impl true
   def close(db) do
     if available?() do
-      Glider.close(db)
+      apply(@glider, :close, [db])
     else
       :ok
     end
