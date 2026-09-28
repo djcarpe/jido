@@ -147,9 +147,14 @@ defmodule Jido.Context.Graph do
   end
 
   @doc false
-  @spec process_name(atom() | String.t()) :: atom()
+  @spec process_name(atom() | String.t() | GenServer.name()) :: GenServer.name()
   def process_name(name) when is_atom(name), do: :"#{name}.Graph"
   def process_name(name) when is_binary(name), do: :"#{name}.Graph"
+  # A registered name — `{:via, Registry, {Reg, key}}` or `{:global, key}` —
+  # is used as given, so an application with many graphs (one per tenant,
+  # say) does not mint an atom for each.
+  def process_name({:via, _, _} = name), do: name
+  def process_name({:global, _} = name), do: name
 
   @impl true
   def init(opts) do
@@ -169,12 +174,12 @@ defmodule Jido.Context.Graph do
         name: name,
         engine: engine,
         handle: handle,
-        origin: to_string(Keyword.get(opts, :origin, name)),
+        origin: origin_of(opts, name),
         store: opts |> Keyword.get(:store) |> normalize_store(),
         mesh: Keyword.get(opts, :mesh),
         topics: Keyword.get(opts, :topics, ["**"]),
         default_topic: Keyword.get(opts, :default_topic, "context"),
-        snapshot_key: Keyword.get(opts, :snapshot_key, "snapshots/#{name}.jsonl"),
+        snapshot_key: Keyword.get(opts, :snapshot_key, "snapshots/#{name_string(name)}.jsonl"),
         snapshot_every: Keyword.get(opts, :snapshot_every, :never),
         snapshot_interval: Keyword.get(opts, :snapshot_interval, :never)
       }
@@ -308,6 +313,16 @@ defmodule Jido.Context.Graph do
   def origin(graph), do: GenServer.call(process_name(graph), :origin)
 
   @doc """
+  The engine handle this graph owns, for reads that bypass the process.
+
+  A read model (an `Ash.DataLayer`, say) can query the handle directly; the
+  NIF serialises access, so that is safe. Writes must still go through
+  `commit/3`, or they are neither stamped nor replicated.
+  """
+  @spec handle(atom() | GenServer.name()) :: term()
+  def handle(graph), do: GenServer.call(process_name(graph), :handle)
+
+  @doc """
   Blocks until every delta already delivered to this graph has been applied.
 
   Mesh delivery is asynchronous, so a test that publishes on one graph and
@@ -365,6 +380,8 @@ defmodule Jido.Context.Graph do
   end
 
   def handle_call(:origin, _from, state), do: {:reply, state.origin, state}
+
+  def handle_call(:handle, _from, state), do: {:reply, state.handle, state}
 
   def handle_call(:sync, _from, state), do: {:reply, :ok, state}
 
@@ -803,4 +820,19 @@ defmodule Jido.Context.Graph do
   defp stringify(props) when is_map(props) do
     Map.new(props, fn {k, v} -> {to_string(k), v} end)
   end
+
+  # An origin must be a plain identifier; a registered-name tuple has none of
+  # its own, so it must be given explicitly.
+  defp origin_of(opts, name) do
+    case Keyword.get(opts, :origin) do
+      nil when is_atom(name) or is_binary(name) -> to_string(name)
+      nil -> raise ArgumentError, "a graph named #{inspect(name)} needs an explicit :origin"
+      origin -> to_string(origin)
+    end
+  end
+
+  defp name_string(name) when is_atom(name) or is_binary(name), do: to_string(name)
+  defp name_string({:via, _, {_, key}}), do: key |> inspect() |> String.replace(~r/[^\w.-]+/, "_")
+  defp name_string({:global, key}), do: key |> inspect() |> String.replace(~r/[^\w.-]+/, "_")
+  defp name_string(other), do: other |> inspect() |> String.replace(~r/[^\w.-]+/, "_")
 end
