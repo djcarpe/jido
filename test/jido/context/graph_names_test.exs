@@ -39,4 +39,23 @@ defmodule Jido.Context.GraphNamesTest do
     handle = Graph.handle(name)
     assert {:ok, %{rows: [[7]]}} = Glider.query(handle, ~s|MATCH (n:Thing) RETURN n.v|)
   end
+
+  test "a late graph catches up from a peer's export, keeping stamps" do
+    early = :"early_#{System.unique_integer([:positive])}"
+    late = :"late_#{System.unique_integer([:positive])}"
+    start_supervised!({Jido.Context.Graph, name: early, location: :memory}, id: :early)
+    start_supervised!({Jido.Context.Graph, name: late, location: :memory}, id: :late)
+
+    {:ok, _} = Jido.Context.assert(early, "paper:1", ["Paper"], %{title: "one"})
+    {:ok, _} = Jido.Context.assert(early, "paper:2", ["Paper"], %{title: "two"})
+    {:ok, jsonl} = Jido.Context.export(early)
+
+    assert :ok = Jido.Context.Graph.import_snapshot(late, jsonl)
+    {:ok, %{rows: rows}} = Jido.Context.query(late, "MATCH (n:Paper) RETURN n.title ORDER BY n.title")
+    assert rows == [["one"], ["two"]]
+
+    # The stamps came across: a fresh write on the late graph gets a higher seq.
+    {:ok, delta} = Jido.Context.assert(late, "paper:3", ["Paper"], %{title: "three"})
+    assert delta.seq > 2
+  end
 end
