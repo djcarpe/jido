@@ -323,12 +323,6 @@ defmodule Jido.Context.Graph do
   def handle(graph), do: GenServer.call(process_name(graph), :handle)
 
   @doc """
-  Blocks until every delta already delivered to this graph has been applied.
-
-  Mesh delivery is asynchronous, so a test that publishes on one graph and
-  reads from another needs a barrier rather than a sleep.
-  """
-  @doc """
   Loads a JSON Lines snapshot — the output of `export/1` on another graph —
   into this one. Managed nodes keep the stamps they carry, so a delta that
   arrives later still wins or loses by its own `{seq, origin}`, and the
@@ -339,6 +333,12 @@ defmodule Jido.Context.Graph do
   def import_snapshot(graph, jsonl, opts \\ []),
     do: GenServer.call(process_name(graph), {:import_snapshot, jsonl}, Keyword.get(opts, :timeout, 60_000))
 
+  @doc """
+  Blocks until every delta already delivered to this graph has been applied.
+
+  Mesh delivery is asynchronous, so a test that publishes on one graph and
+  reads from another needs a barrier rather than a sleep.
+  """
   @spec sync(atom(), timeout()) :: :ok
   def sync(graph, timeout \\ 5_000), do: GenServer.call(process_name(graph), :sync, timeout)
 
