@@ -345,12 +345,6 @@ defmodule Jido.Context.Graph do
       )
 
   @doc """
-  Blocks until every delta already delivered to this graph has been applied.
-
-  Mesh delivery is asynchronous, so a test that publishes on one graph and
-  reads from another needs a barrier rather than a sleep.
-  """
-  @doc """
   Merges another graph's export into this one, keeping last-writer-wins.
 
   Unlike `import_snapshot/3`, which loads a snapshot into an empty graph,
@@ -370,6 +364,12 @@ defmodule Jido.Context.Graph do
         Keyword.get(opts, :timeout, 120_000)
       )
 
+  @doc """
+  Blocks until every delta already delivered to this graph has been applied.
+
+  Mesh delivery is asynchronous, so a test that publishes on one graph and
+  reads from another needs a barrier rather than a sleep.
+  """
   @spec sync(atom(), timeout()) :: :ok
   def sync(graph, timeout \\ 5_000), do: GenServer.call(process_name(graph), :sync, timeout)
 
