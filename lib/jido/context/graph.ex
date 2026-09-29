@@ -184,6 +184,11 @@ defmodule Jido.Context.Graph do
         snapshot_interval: Keyword.get(opts, :snapshot_interval, :never)
       }
 
+      # A file reopened holds stamps from before; the clock must resume above
+      # them or this origin would re-issue sequence numbers and lose every
+      # comparison against its own earlier writes.
+      state = %{state | lamport: max_seq(state)}
+
       state =
         if Keyword.get(opts, :restore, true), do: restore_snapshot(state), else: state
 

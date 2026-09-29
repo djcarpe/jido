@@ -58,4 +58,24 @@ defmodule Jido.Context.GraphNamesTest do
     {:ok, delta} = Jido.Context.assert(late, "paper:3", ["Paper"], %{title: "three"})
     assert delta.seq > 2
   end
+
+  test "a reopened file resumes its clock above what it holds" do
+    dir = Path.join(System.tmp_dir!(), "jido-reopen-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    path = Path.join(dir, "g.gldb")
+    name = :"reopen_#{System.unique_integer([:positive])}"
+
+    {:ok, pid} = Jido.Context.Graph.start_link(name: name, location: {:disk, path: path})
+    {:ok, first} = Jido.Context.assert(name, "k:1", ["K"], %{v: 1})
+    {:ok, second} = Jido.Context.assert(name, "k:1", ["K"], %{v: 2})
+    assert second.seq > first.seq
+    GenServer.stop(pid)
+
+    {:ok, pid} = Jido.Context.Graph.start_link(name: name, location: {:disk, path: path})
+    {:ok, third} = Jido.Context.assert(name, "k:1", ["K"], %{v: 3})
+    assert third.seq > second.seq
+    {:ok, %{rows: [[3]]}} = Jido.Context.query(name, "MATCH (n:K) RETURN n.v")
+    GenServer.stop(pid)
+    File.rm_rf!(dir)
+  end
 end
