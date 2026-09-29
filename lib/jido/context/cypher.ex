@@ -59,6 +59,16 @@ defmodule Jido.Context.Cypher do
     end
   end
 
+  def encode_value(v) when is_binary(v), do: [?", escape(v), ?"] |> IO.iodata_to_binary()
+
+  def encode_value(v) when is_atom(v), do: encode_value(Atom.to_string(v))
+
+  def encode_value(v) when is_list(v) do
+    "[" <> Enum.map_join(v, ", ", &encode_value/1) <> "]"
+  end
+
+  def encode_value(v), do: encode_value(inspect(v))
+
   defp plain_decimal(str) do
     case String.split(str, "e") do
       [_] -> str
@@ -105,16 +115,6 @@ defmodule Jido.Context.Cypher do
         str
     end
   end
-
-  def encode_value(v) when is_binary(v), do: [?", escape(v), ?"] |> IO.iodata_to_binary()
-
-  def encode_value(v) when is_atom(v), do: encode_value(Atom.to_string(v))
-
-  def encode_value(v) when is_list(v) do
-    "[" <> Enum.map_join(v, ", ", &encode_value/1) <> "]"
-  end
-
-  def encode_value(v), do: encode_value(inspect(v))
 
   @doc """
   Validates a Cypher identifier — a label, relationship type or property key.
