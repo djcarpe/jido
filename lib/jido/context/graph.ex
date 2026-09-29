@@ -350,6 +350,26 @@ defmodule Jido.Context.Graph do
   Mesh delivery is asynchronous, so a test that publishes on one graph and
   reads from another needs a barrier rather than a sleep.
   """
+  @doc """
+  Merges another graph's export into this one, keeping last-writer-wins.
+
+  Unlike `import_snapshot/3`, which loads a snapshot into an empty graph,
+  this reads every managed node and edge of the export with the stamp it
+  carries and applies it as if it had arrived from the mesh: a newer stamp
+  wins, an older one is dropped, a tombstone deletes, and doing it twice
+  changes nothing. It is how a graph that was down catches up on what the
+  mesh carried meanwhile.
+  """
+  @spec merge_snapshot(atom() | GenServer.name(), String.t(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def merge_snapshot(graph, jsonl, opts \\ []),
+    do:
+      GenServer.call(
+        process_name(graph),
+        {:merge_snapshot, jsonl},
+        Keyword.get(opts, :timeout, 120_000)
+      )
+
   @spec sync(atom(), timeout()) :: :ok
   def sync(graph, timeout \\ 5_000), do: GenServer.call(process_name(graph), :sync, timeout)
 
@@ -395,6 +415,12 @@ defmodule Jido.Context.Graph do
 
   def handle_call(:export, _from, state) do
     {:reply, state.engine.export(state.handle), state}
+  end
+
+  def handle_call({:merge_snapshot, jsonl}, _from, state) do
+    deltas = snapshot_deltas(jsonl)
+    state = Enum.reduce(deltas, state, &receive_delta(&2, &1))
+    {:reply, {:ok, length(deltas)}, %{state | lamport: max(state.lamport, max_seq(state))}}
   end
 
   def handle_call({:import_snapshot, jsonl}, _from, state) do
@@ -770,6 +796,61 @@ defmodule Jido.Context.Graph do
   # ===========================================================================
   # Snapshots
   # ===========================================================================
+
+  # An export, read back as the deltas that would have produced it: one per
+  # stamp, in stamp order, so the receiving graph judges each by
+  # last-writer-wins exactly as it would have on the mesh.
+  defp snapshot_deltas(jsonl) do
+    lines =
+      jsonl
+      |> String.split("\n", trim: true)
+      |> Enum.flat_map(fn line ->
+        case Jason.decode(line) do
+          {:ok, %{} = entry} -> [entry]
+          _ -> []
+        end
+      end)
+
+    nodes = for %{"type" => "node"} = n <- lines, into: %{}, do: {n["id"], n}
+
+    node_ops =
+      for {_,
+           %{
+             "labels" => labels,
+             "props" => %{"_key" => key, "_seq" => seq, "_origin" => origin} = props
+           }} <- nodes do
+        op =
+          if @tomb_label in labels,
+            do: {:drop_node, key},
+            else: {:put_node, key, labels -- [@node_label], user_props(props)}
+
+        {{origin, seq}, props["_ts"], op}
+      end
+
+    edge_ops =
+      for %{"type" => "edge", "label" => type, "from" => from, "to" => to, "props" => props} <-
+            lines,
+          %{"_seq" => seq, "_origin" => origin} = props,
+          from_key = get_in(nodes, [from, "props", "_key"]),
+          to_key = get_in(nodes, [to, "props", "_key"]),
+          not is_nil(from_key) and not is_nil(to_key) do
+        {{origin, seq}, props["_ts"], {:put_edge, from_key, type, to_key, user_props(props)}}
+      end
+
+    (node_ops ++ edge_ops)
+    |> Enum.group_by(fn {stamp, _, _} -> stamp end)
+    |> Enum.sort_by(fn {{origin, seq}, _} -> {seq, origin} end)
+    |> Enum.map(fn {{origin, seq}, entries} ->
+      ts = entries |> Enum.map(&elem(&1, 1)) |> Enum.reject(&is_nil/1) |> List.first()
+
+      Delta.new("merge", origin, seq, Enum.map(entries, &elem(&1, 2)),
+        ts: ts || System.system_time(:millisecond)
+      )
+    end)
+  end
+
+  defp user_props(props),
+    do: props |> Enum.reject(fn {k, _} -> String.starts_with?(k, "_") end) |> Map.new()
 
   defp restore_snapshot(%State{store: nil} = state), do: state
 

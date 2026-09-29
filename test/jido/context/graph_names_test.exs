@@ -98,4 +98,47 @@ defmodule Jido.Context.GraphNamesTest do
     assert Enum.at(vec, 2) == 12.0
     assert_in_delta Enum.at(vec, 3), 1.0e21, 1.0e6
   end
+
+  test "merging an export converges two graphs and is idempotent" do
+    a = :"merge_a_#{System.unique_integer([:positive])}"
+    b = :"merge_b_#{System.unique_integer([:positive])}"
+    start_supervised!({Jido.Context.Graph, name: a, location: :memory}, id: :a)
+    start_supervised!({Jido.Context.Graph, name: b, location: :memory}, id: :b)
+
+    # Shared past, then divergent present.
+    {:ok, _} = Jido.Context.assert(a, "p:1", ["Paper"], %{title: "one"})
+    {:ok, jsonl} = Jido.Context.export(a)
+    :ok = Jido.Context.Graph.import_snapshot(b, jsonl)
+
+    {:ok, _} = Jido.Context.assert(a, "p:2", ["Paper"], %{title: "two"})
+    {:ok, _} = Jido.Context.relate(a, "p:1", "CITES", "p:2", %{w: 1})
+    {:ok, _} = Jido.Context.assert(b, "p:1", ["Paper"], %{title: "one, revised"})
+    {:ok, _} = Jido.Context.retract(b, "p:1")
+    {:ok, _} = Jido.Context.assert(b, "p:3", ["Paper"], %{title: "three"})
+
+    {:ok, export_a} = Jido.Context.export(a)
+    {:ok, export_b} = Jido.Context.export(b)
+    assert {:ok, n} = Jido.Context.Graph.merge_snapshot(b, export_a)
+    assert n > 0
+    assert {:ok, _} = Jido.Context.Graph.merge_snapshot(a, export_b)
+
+    titles = fn g ->
+      {:ok, %{rows: rows}} =
+        Jido.Context.query(g, "MATCH (p:Paper) RETURN p.title ORDER BY p.title")
+
+      List.flatten(rows)
+    end
+
+    # p:1 was deleted on b after a's write: the tombstone wins on both; the rest is the union.
+    assert titles.(a) == ["three", "two"]
+    assert titles.(b) == ["three", "two"]
+
+    # Again: nothing changes, nothing duplicates.
+    {:ok, export_a2} = Jido.Context.export(a)
+    assert {:ok, _} = Jido.Context.Graph.merge_snapshot(b, export_a2)
+    assert {:ok, _} = Jido.Context.Graph.merge_snapshot(b, export_a2)
+    assert titles.(b) == ["three", "two"]
+    {:ok, %{rows: [[count]]}} = Jido.Context.query(b, "MATCH (p:Paper) RETURN count(p)")
+    assert count == 2
+  end
 end
