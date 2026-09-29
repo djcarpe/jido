@@ -141,4 +141,27 @@ defmodule Jido.Context.GraphNamesTest do
     {:ok, %{rows: [[count]]}} = Jido.Context.query(b, "MATCH (p:Paper) RETURN count(p)")
     assert count == 2
   end
+
+  test "an edge that arrives before its node leaves a placeholder the node's write replaces" do
+    a = :"order_a_#{System.unique_integer([:positive])}"
+    b = :"order_b_#{System.unique_integer([:positive])}"
+    start_supervised!({Jido.Context.Graph, name: a, location: :memory}, id: :a)
+    start_supervised!({Jido.Context.Graph, name: b, location: :memory}, id: :b)
+
+    {:ok, x_delta} = Jido.Context.assert(a, "x:1", ["X"], %{v: 1})
+    {:ok, node_delta} = Jido.Context.assert(a, "p:1", ["Paper"], %{title: "one"})
+    {:ok, edge_delta} = Jido.Context.relate(a, "x:1", "LINKS", "p:1")
+
+    # b hears the edge before the paper (that delta was late), then the paper.
+    :ok = Jido.Context.Graph.apply_delta(b, x_delta)
+    :ok = Jido.Context.Graph.apply_delta(b, edge_delta)
+    :ok = Jido.Context.Graph.sync(b)
+    :ok = Jido.Context.Graph.apply_delta(b, node_delta)
+    :ok = Jido.Context.Graph.sync(b)
+
+    {:ok, %{rows: rows}} = Jido.Context.query(b, "MATCH (x:X)-[:LINKS]->(p:Paper) RETURN p.title")
+    assert rows == [["one"]]
+    {:ok, %{rows: [[n]]}} = Jido.Context.query(b, "MATCH (n:Ctx {_key: 'p:1'}) RETURN count(n)")
+    assert n == 1
+  end
 end

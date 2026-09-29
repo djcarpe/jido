@@ -617,13 +617,15 @@ defmodule Jido.Context.Graph do
   # them on a different topic, or in a delta still in flight. A placeholder node
   # carries no labels and the stamp of the edge that needed it, so a later, real
   # assert of that node wins the comparison and fills it in.
-  defp ensure_endpoint(state, delta, key) do
+  defp ensure_endpoint(state, _delta, key) do
     with {:ok, existing} <- read_stamp(state, @node_label, key) do
       if existing do
         {:ok, state}
       else
-        # A placeholder is bookkeeping, not a write that wins or loses.
-        with {:ok, state, _outcome} <- write_node(state, delta, key, [], %{}), do: {:ok, state}
+        # A placeholder is bookkeeping, not a write that wins or loses: it
+        # carries the lowest stamp there is, so the node's real write —
+        # whenever it arrives — replaces it.
+        create_placeholder(state, key)
       end
     end
   end
@@ -647,6 +649,12 @@ defmodule Jido.Context.Graph do
     end
   end
 
+  defp create_placeholder(state, key) do
+    props = %{@key_prop => key, "_seq" => 0, "_origin" => "", "_placeholder" => true}
+    statement = "CREATE (n#{Cypher.labels([@node_label])} #{Cypher.props(props)})"
+    with {:ok, _} <- run(state, statement), do: {:ok, state}
+  end
+
   defp create_node(state, delta, key, labels, props) do
     all_props = Map.merge(props, stamp_props(delta, key))
     all_labels = [@node_label | Enum.map(labels, &Cypher.identifier!/1)] |> Enum.uniq()
@@ -657,7 +665,7 @@ defmodule Jido.Context.Graph do
   end
 
   defp update_node(state, delta, key, labels, props) do
-    all_props = Map.merge(props, stamp_props(delta, key))
+    all_props = props |> Map.merge(stamp_props(delta, key)) |> Map.put("_placeholder", nil)
 
     set_clause =
       [Cypher.set_props("n", all_props), label_set("n", labels)]
@@ -818,7 +826,8 @@ defmodule Jido.Context.Graph do
            %{
              "labels" => labels,
              "props" => %{"_key" => key, "_seq" => seq, "_origin" => origin} = props
-           }} <- nodes do
+           }} <- nodes,
+          origin != "" do
         op =
           if @tomb_label in labels,
             do: {:drop_node, key},
