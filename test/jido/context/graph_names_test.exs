@@ -51,7 +51,10 @@ defmodule Jido.Context.GraphNamesTest do
     {:ok, jsonl} = Jido.Context.export(early)
 
     assert :ok = Jido.Context.Graph.import_snapshot(late, jsonl)
-    {:ok, %{rows: rows}} = Jido.Context.query(late, "MATCH (n:Paper) RETURN n.title ORDER BY n.title")
+
+    {:ok, %{rows: rows}} =
+      Jido.Context.query(late, "MATCH (n:Paper) RETURN n.title ORDER BY n.title")
+
     assert rows == [["one"], ["two"]]
 
     # The stamps came across: a fresh write on the late graph gets a higher seq.
@@ -77,5 +80,22 @@ defmodule Jido.Context.GraphNamesTest do
     {:ok, %{rows: [[3]]}} = Jido.Context.query(name, "MATCH (n:K) RETURN n.v")
     GenServer.stop(pid)
     File.rm_rf!(dir)
+  end
+
+  test "floats are written in plain decimal notation, whatever their size" do
+    alias Jido.Context.Cypher
+    assert Cypher.encode_value(1.5) == "1.5"
+    assert Cypher.encode_value(-8.831631857901812e-5) == "-0.00008831631857901812"
+    assert Cypher.encode_value(1.0e20) == "100000000000000000000.0"
+    assert Cypher.encode_value(2.0e-5) == "0.00002"
+
+    name = :"floats_#{System.unique_integer([:positive])}"
+    start_supervised!({Jido.Context.Graph, name: name, location: :memory})
+    {:ok, _} = Jido.Context.assert(name, "v:1", ["V"], %{vec: [1.0e-7, -3.25e-5, 12.0, 1.0e21]})
+    {:ok, %{rows: [[vec]]}} = Jido.Context.query(name, "MATCH (n:V) RETURN n.vec")
+    assert_in_delta Enum.at(vec, 0), 1.0e-7, 1.0e-20
+    assert_in_delta Enum.at(vec, 1), -3.25e-5, 1.0e-20
+    assert Enum.at(vec, 2) == 12.0
+    assert_in_delta Enum.at(vec, 3), 1.0e21, 1.0e6
   end
 end

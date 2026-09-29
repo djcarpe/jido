@@ -49,10 +49,61 @@ defmodule Jido.Context.Cypher do
   def encode_value(false), do: "false"
   def encode_value(v) when is_integer(v), do: Integer.to_string(v)
 
+  # Always plain decimal notation: glider's parser reads `1.5` and `-0.00002`
+  # but not `2.0e-5`, which Float.to_string/1 produces for small values.
   def encode_value(v) when is_float(v) do
-    # Glider parses floats; `1.0e10` and `1.0` both round-trip, but an integral
-    # float must keep its decimal point or it comes back as an int.
-    Float.to_string(v)
+    cond do
+      v != v -> "null"
+      v in [:infinity, :neg_infinity] -> "null"
+      true -> :erlang.float_to_binary(v, [:short]) |> plain_decimal()
+    end
+  end
+
+  defp plain_decimal(str) do
+    case String.split(str, "e") do
+      [_] -> str
+      [mantissa, exponent] -> shift_decimal(mantissa, String.to_integer(exponent))
+    end
+  end
+
+  defp shift_decimal(mantissa, exponent) do
+    {sign, digits} =
+      if String.starts_with?(mantissa, "-"),
+        do: {"-", String.slice(mantissa, 1..-1//1)},
+        else: {"", mantissa}
+
+    [int, frac] =
+      case String.split(digits, ".") do
+        [i] -> [i, ""]
+        [i, f] -> [i, f]
+      end
+
+    all = int <> frac
+    point = String.length(int) + exponent
+
+    cond do
+      point <= 0 ->
+        sign <> "0." <> String.duplicate("0", -point) <> all
+
+      point >= String.length(all) ->
+        sign <> all <> String.duplicate("0", point - String.length(all)) <> ".0"
+
+      true ->
+        sign <> String.slice(all, 0, point) <> "." <> String.slice(all, point..-1//1)
+    end
+    |> trim_fraction()
+  end
+
+  # "0.000020" -> "0.00002"; "12.0" stays "12.0".
+  defp trim_fraction(str) do
+    case String.split(str, ".") do
+      [int, frac] ->
+        trimmed = String.trim_trailing(frac, "0")
+        int <> "." <> if(trimmed == "", do: "0", else: trimmed)
+
+      _ ->
+        str
+    end
   end
 
   def encode_value(v) when is_binary(v), do: [?", escape(v), ?"] |> IO.iodata_to_binary()

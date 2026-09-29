@@ -334,9 +334,15 @@ defmodule Jido.Context.Graph do
   clock resumes above everything imported. This is how a graph that starts
   late catches up from a peer that was there all along.
   """
-  @spec import_snapshot(atom() | GenServer.name(), String.t(), keyword()) :: :ok | {:error, term()}
+  @spec import_snapshot(atom() | GenServer.name(), String.t(), keyword()) ::
+          :ok | {:error, term()}
   def import_snapshot(graph, jsonl, opts \\ []),
-    do: GenServer.call(process_name(graph), {:import_snapshot, jsonl}, Keyword.get(opts, :timeout, 60_000))
+    do:
+      GenServer.call(
+        process_name(graph),
+        {:import_snapshot, jsonl},
+        Keyword.get(opts, :timeout, 60_000)
+      )
 
   @doc """
   Blocks until every delta already delivered to this graph has been applied.
