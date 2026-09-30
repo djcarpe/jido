@@ -223,6 +223,22 @@ defmodule Jido.Context.GraphTest do
       assert [] = rows(g, "MATCH (p:Ctx) RETURN p")
       assert length(rows(g, "MATCH (t:CtxTomb) RETURN t")) == 1
     end
+
+    test "old tombstones can be purged; recent ones stay" do
+      {g, _} = start_graph([])
+
+      for k <- ~w(a b c), do: {:ok, _} = Context.assert(g, k, ["Paper"], %{})
+      {:ok, _} = Context.retract(g, "a")
+      {:ok, _} = Context.retract(g, "b")
+      assert length(rows(g, "MATCH (t:CtxTomb) RETURN t")) == 2
+
+      # nothing is older than an hour ago
+      assert {:ok, 0} = Graph.purge_tombstones(g, System.system_time(:millisecond) - 3_600_000)
+      # everything is older than a second from now
+      assert {:ok, 2} = Graph.purge_tombstones(g, System.system_time(:millisecond) + 1_000)
+      assert rows(g, "MATCH (t:CtxTomb) RETURN t") == []
+      assert [["c"]] = rows(g, "MATCH (p:Paper) RETURN p._key")
+    end
   end
 
   describe "last-writer-wins" do

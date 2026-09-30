@@ -303,6 +303,17 @@ defmodule Jido.Context.Graph do
   @spec export(atom(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def export(graph, opts \\ []), do: GenServer.call(process_name(graph), :export, timeout(opts))
 
+  @doc """
+  Removes tombstones older than `older_than_ms` (a `_ts` in milliseconds).
+  A tombstone only has to outlive the deltas that could still arrive for its
+  key; once the mesh has settled — seconds, normally — it is dead weight in
+  exports and scans. Local maintenance: every node purges its own copy.
+  Returns the number removed.
+  """
+  @spec purge_tombstones(term(), integer(), keyword()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def purge_tombstones(graph, older_than_ms, opts \\ []),
+    do: GenServer.call(process_name(graph), {:purge_tombstones, older_than_ms}, timeout(opts))
+
   @doc "Writes a snapshot to the configured store."
   @spec snapshot(atom(), keyword()) :: :ok | {:error, term()}
   def snapshot(graph, opts \\ []),
@@ -403,6 +414,23 @@ defmodule Jido.Context.Graph do
 
   def handle_call({:query, cypher}, _from, state) do
     {:reply, state.engine.query(state.handle, cypher), state}
+  end
+
+  def handle_call({:purge_tombstones, cutoff}, _from, state) when is_integer(cutoff) do
+    count =
+      case state.engine.query(state.handle, "MATCH (t#{label(@tomb_label)}) WHERE t._ts < #{cutoff} RETURN count(t)") do
+        {:ok, %{rows: [[n]]}} when is_integer(n) -> n
+        _ -> 0
+      end
+
+    if count > 0 do
+      case run(state, "MATCH (t#{label(@tomb_label)}) WHERE t._ts < #{cutoff} DELETE t") do
+        {:ok, _} -> {:reply, {:ok, count}, state}
+        {:error, e} -> {:reply, {:error, e}, state}
+      end
+    else
+      {:reply, {:ok, 0}, state}
+    end
   end
 
   def handle_call({:fetch, key}, _from, state) do
