@@ -72,6 +72,14 @@ defmodule Jido.Context.Engine do
   @callback available?() :: boolean()
 
   @doc """
+  Runs `fun` with per-statement tracing off in the calling process: for
+  bulk work (applying a delta) whose statements are measured as a whole.
+  """
+  @callback quietly((-> result)) :: result when result: term()
+
+  @optional_callbacks quietly: 1
+
+  @doc """
   The default engine.
 
   Configurable so a test or an alternative backend can replace Glider:

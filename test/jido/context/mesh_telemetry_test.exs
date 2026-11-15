@@ -160,7 +160,8 @@ defmodule Jido.Context.MeshTelemetryTest do
     test "the event names are listed" do
       assert Graph.telemetry_events() == [
                [:jido, :context, :delta, :applied],
-               [:jido, :context, :delta, :failed]
+               [:jido, :context, :delta, :failed],
+               [:jido, :context, :delta, :backlog]
              ]
 
       assert length(Mesh.telemetry_events()) == 3

@@ -129,6 +129,24 @@ defmodule Jido.Context.Engine.Glider do
     span(:stats, %{}, fn -> guarded(fn -> apply(@glider, :stats, [db]) end) end)
   end
 
+  # The key `Glider.OpenTelemetry` checks before opening a statement span.
+  @quiet {:"Elixir.Glider.OpenTelemetry", :quiet}
+
+  @impl true
+  def quietly(fun) do
+    case Process.put(@quiet, true) do
+      nil ->
+        try do
+          fun.()
+        after
+          Process.delete(@quiet)
+        end
+
+      true ->
+        fun.()
+    end
+  end
+
   @impl true
   def close(db) do
     if available?() do
