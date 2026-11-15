@@ -77,7 +77,7 @@ defmodule Jido.Context.Engine.Glider do
 
   defp open_file(path, sync) do
     with :ok <- ensure_parent_dir(path) do
-      apply(@glider, :open, [path, sync])
+      apply(@glider, :open, [path, [sync: sync, work_mem: 32 * 1024 * 1024]])
     end
   end
 
