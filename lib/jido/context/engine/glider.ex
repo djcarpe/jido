@@ -31,6 +31,8 @@ defmodule Jido.Context.Engine.Glider do
 
   @behaviour Jido.Context.Engine
 
+  import Bitwise, only: [<<<: 2]
+
   @install_hint """
   Jido.Context needs the Glider graph engine, which is an optional dependency.
 
@@ -107,9 +109,108 @@ defmodule Jido.Context.Engine.Glider do
     end)
   end
 
+  # A cursor batch: well under the jido graph's work_mem and Glider's
+  # default per-batch caps, so a stamp read holds a few hundred KiB at a time.
+  @stream_rows 1_000
+  @stream_bytes 1 <<< 20
+
+  @doc """
+  Reads every row of `statement` through a disk-spooled Glider cursor,
+  `#{@stream_rows}` rows (or 1 MiB) a batch, folding `fun` over each batch.
+
+  Unlike `query/2` this is not refused by the per-reply row and byte cap: the
+  result is spooled to disk when the cursor opens and read back a batch at a
+  time. The cursor is closed whatever happens, including `fun` raising.
+  """
+  @impl true
+  def stream(db, statement, acc, fun) when is_function(fun, 2) do
+    meta = statement_metadata(statement)
+
+    :telemetry.span([:jido, :context, :glider, :stream], meta, fn ->
+      {result, rows, batches} =
+        case guarded(fn -> {:ok, :available} end) do
+          {:ok, :available} -> open_and_drain(db, statement, acc, fun)
+          {:error, _} = error -> {error, 0, 0}
+        end
+
+      stop =
+        case result do
+          {:ok, _} -> %{result: :ok, rows: rows, batches: batches}
+          {:error, reason} -> %{result: :error, error: reason, rows: rows, batches: batches}
+        end
+
+      {result, Map.merge(meta, stop)}
+    end)
+  end
+
+  defp open_and_drain(db, statement, acc, fun) do
+    case apply(@glider, :cursor, [
+           db,
+           statement,
+           [],
+           [max_rows: @stream_rows, max_bytes: @stream_bytes]
+         ]) do
+      {:ok, cursor} ->
+        try do
+          drain(cursor, acc, fun, 0, 0)
+        after
+          apply(@glider, :cursor_close, [cursor])
+        end
+
+      {:error, reason} ->
+        {{:error, reason}, 0, 0}
+    end
+  end
+
+  defp drain(cursor, acc, fun, rows, batches) do
+    case apply(@glider, :cursor_next, [cursor]) do
+      {:ok, {%{rows: batch}, done?}} ->
+        acc = fun.(batch, acc)
+        rows = rows + length(batch)
+
+        if done?,
+          do: {{:ok, acc}, rows, batches + 1},
+          else: drain(cursor, acc, fun, rows, batches + 1)
+
+      {:error, reason} ->
+        {{:error, reason}, rows, batches}
+    end
+  end
+
   @impl true
   def export(db) do
-    span(:export, %{}, fn -> guarded(fn -> apply(@glider, :export_jsonl, [db]) end) end)
+    span(:export, %{}, fn ->
+      guarded(fn ->
+        case apply(@glider, :export_jsonl, [db]) do
+          {:error, reason} when is_binary(reason) ->
+            if reason =~ "exceeds work_mem", do: export_via_file(db), else: {:error, reason}
+
+          other ->
+            other
+        end
+      end)
+    end)
+  end
+
+  # A graph whose JSON Lines pass the in-memory export cap (work_mem / 4) is
+  # streamed to a file by Glider and read back: the caller still gets the whole
+  # export (it asked for one binary), but native memory stays bounded.
+  defp export_via_file(db) do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "jido-context-export-#{System.os_time(:nanosecond)}-#{System.unique_integer([:positive])}.jsonl"
+      )
+
+    try do
+      case apply(@glider, :export_file, [db, path]) do
+        {:ok, _} -> File.read(path)
+        :ok -> File.read(path)
+        {:error, reason} -> {:error, reason}
+      end
+    after
+      File.rm(path)
+    end
   end
 
   @impl true
@@ -170,6 +271,7 @@ defmodule Jido.Context.Engine.Glider do
   |---|---|
   | `:open` | opening a graph, with `:location` |
   | `:query` | a read, with `:rows` returned |
+  | `:stream` | a batched read, with `:rows` and `:batches` |
   | `:run` | a write, with `:touched` entities |
   | `:import` / `:export` | bulk load and dump, with `:bytes` |
   | `:checkpoint` / `:stats` | flush and counters |
@@ -195,7 +297,7 @@ defmodule Jido.Context.Engine.Glider do
   """
   @spec telemetry_events() :: [[atom()]]
   def telemetry_events do
-    for op <- [:open, :query, :run, :import, :export, :checkpoint, :stats],
+    for op <- [:open, :query, :stream, :run, :import, :export, :checkpoint, :stats],
         suffix <- [:start, :stop, :exception] do
       [:jido, :context, :glider, op, suffix]
     end

@@ -1002,51 +1002,92 @@ defmodule Jido.Context.Graph do
 
   # Reads every stamp in the graph into the index; returns the highest seq,
   # where the clock must resume.
+  #
+  # The stamp sets grow with the graph — an org graph holds hundreds of
+  # thousands — so each is streamed in bounded batches and inserted into the
+  # index a batch at a time: never one reply (which the engine caps) and never
+  # the whole set as a list.
   defp load_stamps(state) do
     :ets.delete_all_objects(state.stamps)
 
-    nodes = stamp_rows!(state, "MATCH (n#{label(@node_label)}) RETURN n._key, n._seq, n._origin")
-    tombs = load_tombs(state)
-
-    edges =
-      stamp_rows!(
+    top =
+      fold_stamps!(
         state,
-        "MATCH (a#{label(@node_label)})-[r]->(b#{label(@node_label)}) " <>
-          "RETURN a._key, type(r), b._key, r._seq, r._origin"
+        "MATCH (n#{label(@node_label)}) RETURN n._key, n._seq, n._origin",
+        0,
+        fn rows, top ->
+          :ets.insert(
+            state.stamps,
+            for([key, seq, origin] <- rows, do: {{:n, key}, {seq, origin}})
+          )
+
+          top_seq(rows, top)
+        end
       )
 
-    :ets.insert(state.stamps, for([key, seq, origin] <- nodes, do: {{:n, key}, {seq, origin}}))
+    top = max(top, load_tombs(state))
 
-    :ets.insert(
-      state.stamps,
-      Enum.flat_map(edges, fn [from, type, to, seq, origin] ->
-        [{{:e, from, type, to}, {seq, origin}}, {{:i, to, from, type}, true}]
-      end)
+    fold_stamps!(
+      state,
+      "MATCH (a#{label(@node_label)})-[r]->(b#{label(@node_label)}) " <>
+        "RETURN a._key, type(r), b._key, r._seq, r._origin",
+      top,
+      fn rows, top ->
+        :ets.insert(
+          state.stamps,
+          Enum.flat_map(rows, fn [from, type, to, seq, origin] ->
+            [{{:e, from, type, to}, {seq, origin}}, {{:i, to, from, type}, true}]
+          end)
+        )
+
+        top_seq(rows, top)
+      end
     )
-
-    [nodes, tombs, edges]
-    |> Enum.flat_map(fn rows -> Enum.map(rows, &Enum.at(&1, -2)) end)
-    |> Enum.max(fn -> 0 end)
   end
 
+  # Reloads the tombstone index; returns the highest tombstone seq.
   defp load_tombs(state) do
     :ets.match_delete(state.stamps, {{:t, :_}, :_})
-    tombs = stamp_rows!(state, "MATCH (t#{label(@tomb_label)}) RETURN t._key, t._seq, t._origin")
-    :ets.insert(state.stamps, for([key, seq, origin] <- tombs, do: {{:t, key}, {seq, origin}}))
-    tombs
+
+    fold_stamps!(
+      state,
+      "MATCH (t#{label(@tomb_label)}) RETURN t._key, t._seq, t._origin",
+      0,
+      fn rows, top ->
+        :ets.insert(state.stamps, for([key, seq, origin] <- rows, do: {{:t, key}, {seq, origin}}))
+        top_seq(rows, top)
+      end
+    )
   end
 
-  # Only stamped entities count, as only they did when stamps were queried.
-  defp stamp_rows!(state, statement) do
-    case state.engine.query(state.handle, statement) do
-      {:ok, %{rows: rows}} ->
-        Enum.filter(rows, fn row ->
-          [seq, origin] = Enum.take(row, -2)
-          is_integer(seq) and is_binary(origin) and Enum.all?(Enum.drop(row, -2), &is_binary/1)
-        end)
+  defp top_seq(rows, top), do: Enum.reduce(rows, top, &max(Enum.at(&1, -2), &2))
+
+  # Folds `fun` over the stamped rows of `statement`, a batch at a time. Only
+  # stamped entities count, as only they did when stamps were queried.
+  defp fold_stamps!(state, statement, acc, fun) do
+    case stream_rows(state, statement, acc, fn rows, acc ->
+           fun.(Enum.filter(rows, &stamped_row?/1), acc)
+         end) do
+      {:ok, acc} ->
+        acc
 
       {:error, reason} ->
         raise "jido context graph #{inspect(state.name)}: could not read stamps: #{inspect(reason)}"
+    end
+  end
+
+  defp stamped_row?(row) do
+    [seq, origin] = Enum.take(row, -2)
+    is_integer(seq) and is_binary(origin) and Enum.all?(Enum.drop(row, -2), &is_binary/1)
+  end
+
+  # An engine without `stream/4` answers in one reply, as before.
+  defp stream_rows(state, statement, acc, fun) do
+    if function_exported?(state.engine, :stream, 4) do
+      state.engine.stream(state.handle, statement, acc, fun)
+    else
+      with {:ok, %{rows: rows}} <- state.engine.query(state.handle, statement),
+           do: {:ok, fun.(rows, acc)}
     end
   end
 

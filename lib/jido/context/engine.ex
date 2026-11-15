@@ -23,7 +23,9 @@ defmodule Jido.Context.Engine do
   * A handle is opaque and is only ever touched from the owning
     `Jido.Context.Graph` process, so implementations need no internal locking
     beyond whatever the engine itself requires.
-  * `run/2` is for statements executed for effect; `query/2` returns rows.
+  * `run/2` is for statements executed for effect; `query/2` returns rows,
+    and may refuse a reply too large to hold at once; `stream/4` reads a
+    result of any size in bounded batches.
   * `export/1` and `import/2` move a whole graph as JSON Lines. They are the
     snapshot format, so they must round-trip: `import(open(), export(g))`
     reproduces `g`.
@@ -72,12 +74,26 @@ defmodule Jido.Context.Engine do
   @callback available?() :: boolean()
 
   @doc """
+  Reads every row of a query in bounded batches, folding `fun` over each
+  batch in order, and returns the final accumulator.
+
+  For reads whose size grows with the graph — the stamp index at start,
+  every tombstone — which `query/2` refuses once they pass the engine's
+  per-reply row or byte cap. No more than one batch is held in memory at a
+  time, so `fun` should consume each batch (insert it, count it) rather than
+  collect them all.
+  """
+  @callback stream(handle(), String.t(), acc, ([[term()]], acc -> acc)) ::
+              {:ok, acc} | {:error, term()}
+            when acc: term()
+
+  @doc """
   Runs `fun` with per-statement tracing off in the calling process: for
   bulk work (applying a delta) whose statements are measured as a whole.
   """
   @callback quietly((-> result)) :: result when result: term()
 
-  @optional_callbacks quietly: 1
+  @optional_callbacks quietly: 1, stream: 4
 
   @doc """
   The default engine.

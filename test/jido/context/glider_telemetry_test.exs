@@ -92,12 +92,36 @@ defmodule Jido.Context.GliderTelemetryTest do
     assert_receive {:telemetry, [:jido, :context, :glider, :export, :stop], _, %{result: :ok}}
   end
 
+  test "the stamp index is read in batches, measured as :stream, not as one capped query" do
+    {:ok, db} = Glider.open(:memory)
+    on_exit(fn -> Glider.close(db) end)
+
+    for i <- 1..2_500,
+        do: {:ok, _} = Glider.run(db, "CREATE (:Ctx {_key: 'k#{i}', _seq: #{i}, _origin: 'o'})")
+
+    flush()
+
+    assert {:ok, {2_500, sizes}} =
+             Glider.stream(db, "MATCH (n:Ctx) RETURN n._key, n._seq, n._origin", {0, []}, fn
+               rows, {n, sizes} -> {n + length(rows), [length(rows) | sizes]}
+             end)
+
+    assert Enum.all?(sizes, &(&1 <= 1_000)) and length(sizes) >= 3
+
+    assert_receive {:telemetry, [:jido, :context, :glider, :stream, :stop], %{duration: _},
+                    %{result: :ok, rows: 2_500, operation: "MATCH"}}
+
+    assert {:error, _} = Glider.stream(db, "CREATE (:Nope)", 0, fn _, acc -> acc end)
+
+    assert_receive {:telemetry, [:jido, :context, :glider, :stream, :stop], _, %{result: :error}}
+  end
+
   test "telemetry_events/0 lists every operation in all three phases" do
     events = Glider.telemetry_events()
 
-    assert length(events) == 7 * 3
+    assert length(events) == 8 * 3
 
-    for op <- [:open, :query, :run, :import, :export, :checkpoint, :stats] do
+    for op <- [:open, :query, :stream, :run, :import, :export, :checkpoint, :stats] do
       assert [:jido, :context, :glider, op, :stop] in events
     end
   end
